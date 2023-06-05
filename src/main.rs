@@ -6,7 +6,7 @@ use chrono::Utc;
 use std::marker::Sync;
 use file_lock::FileLock;
 use std::io::{Write, BufReader, BufRead};
-use std::fs::{File};
+use std::fs::{OpenOptions};
 use std::collections::HashSet;
 
 mod xrpc_client;
@@ -96,8 +96,6 @@ async fn command_run(
 
     post_items(&client, &channel, &filelock_path, &db_path).await?;
 
-    write_done_links_on_db(&db_path, &channel).await?;
-
     Ok(())
 }
 
@@ -116,50 +114,100 @@ async fn post_items<Client>(
 ) -> Result<(), Box<dyn Error>>
     where Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync
 {
-    let options = file_lock::FileOptions::new()
-        .write(true)
-        .create(true)
-        .append(true)
-        ;
-    let mut filelock = FileLock::lock(filelock_path, false, options)
-        .map_err(|err| format!("Failed to get lock: {err}"))?;
-    write!(filelock.file, "{}", Utc::now().to_rfc3339())?;
-
-    let mut done_links: HashSet<String> = HashSet::new();
-    for done_link in BufReader::new(File::open(db_path)?).lines() {
-        done_links.insert(done_link?);
+    {
+        let mut append_db_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(db_path)
+            .map_err(|err| format!("Failed to open DB: {err}"))?;
+        append_db_file.write(&vec![])?;
     }
 
-    for item in &channel.items {
-        if let Some(item_post) = post_item(client, &item, &done_links).await? {
-            println!(
-                "orig_link={}, cid={}, uri={}",
-                item_post.orig_link,
-                item_post.bsky_post.cid,
-                item_post.bsky_post.uri,
-            );
+    {
+        let mut filelock = FileLock::lock(
+            filelock_path,
+            false,
+            file_lock::FileOptions::new().write(true).create(true).truncate(true),
+        )
+            .map_err(|err| format!("Failed to get lock: {err}"))?;
+        writeln!(filelock.file, "{}", Utc::now().to_rfc3339())
+            .map_err(|err| format!("Failed to write lock: {err}"))?;
+
+        let done_links = {
+            let mut done_links: HashSet<String> = HashSet::new();
+            let db_file = OpenOptions::new()
+                .read(true)
+                .open(db_path)
+                .map_err(|err| format!("Failed to open DB: {err}"))?;
+            for done_link in BufReader::new(db_file).lines() {
+                done_links.insert(done_link?);
+            }
+            done_links
+        };
+
+        let mut processed_links: Vec<String> = vec![];
+        {
+            let mut append_db_file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(db_path)
+                .map_err(|err| format!("Failed to open DB: {err}"))?;
+            for item in channel.items.iter().take(2) {
+                let item_post = post_item(client, &item, &done_links).await?;
+                match item_post.bsky_post_opt {
+                    None => {
+                        println!(
+                            "orig_link={}: Already posted to Bluesky.",
+                            item_post.orig_link,
+                        );
+                    }
+                    Some(bsky_post) => {
+                        println!(
+                            "orig_link={}: Posted to Bluesky: cid={}, uri={}",
+                            item_post.orig_link,
+                            bsky_post.cid,
+                            bsky_post.uri,
+                        );
+                    }
+                }
+                append_db_file.write_all(item_post.orig_link.as_bytes())
+                    .map_err(|err| format!("Failed to write DB: {err}"))?;
+                append_db_file.write_all("\n".as_bytes())
+                    .map_err(|err| format!("Failed to write DB: {err}"))?;
+                append_db_file.flush()
+                    .map_err(|err| format!("Failed to flush DB: {err}"))?;
+                processed_links.push(item_post.orig_link);
+            }
+        }
+
+        {
+            let mut write_db_file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(db_path)
+                .map_err(|err| format!("Failed to open DB: {err}"))?;
+            write_db_file.write_all(processed_links.join("\n").as_bytes())
+                .map_err(|err| format!("Failed to write DB: {err}"))?;
         }
     }
 
-    Ok(())
-}
 
-async fn write_done_links_on_db(db_path: &str, channel: &rss::Channel) -> Result<(), Box<dyn Error>> {
-    println!("{:?}, {:?}", db_path, channel);
     Ok(())
 }
 
 #[derive(Debug)]
 struct ItemPost {
     orig_link: String,
-    bsky_post: BskyPost,
+    bsky_post_opt: Option<BskyPost>,
 }
 
 async fn post_item<Client>(
     client: &Client,
     item: &rss::Item,
     done_links: &HashSet<String>,
-) -> Result<Option<ItemPost>, Box<dyn Error>>
+) -> Result<ItemPost, Box<dyn Error>>
     where Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync
 {
     use bsky::richtext::facet;
@@ -182,7 +230,10 @@ async fn post_item<Client>(
     };
 
     if done_links.contains(item_link) {
-        return Ok(None);
+        return Ok(ItemPost {
+            orig_link: item_link.to_string(),
+            bsky_post_opt: None,
+        });
     }
 
     let mut content = String::from("");
@@ -272,10 +323,10 @@ async fn post_item<Client>(
 
     let result = post_to_bsky(client, content, facets).await?;
 
-    Ok(Some(ItemPost {
+    Ok(ItemPost {
         orig_link: item_link.to_string(),
-        bsky_post: result,
-    }))
+        bsky_post_opt: Some(result),
+    })
 }
 
 #[derive(Debug)]
