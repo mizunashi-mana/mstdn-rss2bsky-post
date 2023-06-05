@@ -1,0 +1,10 @@
+[Unit]
+Description=The timer of Mastodon RSS to Bluesky posts
+ConditionPathExists=/var/lib/mstdn-rss2bsky-post
+
+[Timer]
+OnCalendar=*:0/2
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Mastodon RSS to Bluesky posts
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/mstdn-rss2bsky-post
+ExecStart=/usr/local/bin/mstdn-rss2bsky-post \
+    --filelock-path /var/lib/mstdn-rss2bsky-post/post.lock \
+    --db-path /var/lib/mstdn-rss2bsky-post/db.txt \
+    run --feed-url "$FEED_URL"
