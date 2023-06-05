@@ -1,19 +1,19 @@
-use clap::{Parser, Subcommand};
-use std::error::Error;
-use atrium_api::com::atproto;
 use atrium_api::app::bsky;
+use atrium_api::com::atproto;
 use chrono::Utc;
-use std::marker::Sync;
+use clap::{Parser, Subcommand};
 use file_lock::FileLock;
-use std::io::{Write, BufReader, BufRead};
-use std::fs::{OpenOptions};
 use std::collections::HashSet;
+use std::error::Error;
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Write};
+use std::marker::Sync;
 
 mod xrpc_client;
 use xrpc_client::{XrpcHttpClient, XrpcReqwestClient};
 
 mod richtext;
-use richtext::{RichTextSegment};
+use richtext::RichTextSegment;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -54,17 +54,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Run { feed_url, atproto_identifier, atproto_password, .. } => {
-            command_run(
-                feed_url.to_string(),
-                cli.xrpc_host.to_string(),
-                atproto_identifier.to_string(),
-                atproto_password.to_string(),
-                cli.filelock_path.to_string(),
-                cli.db_path.to_string(),
-            )
-        }
-    }.await?;
+        Commands::Run {
+            feed_url,
+            atproto_identifier,
+            atproto_password,
+            ..
+        } => command_run(
+            feed_url.to_string(),
+            cli.xrpc_host.to_string(),
+            atproto_identifier.to_string(),
+            atproto_password.to_string(),
+            cli.filelock_path.to_string(),
+            cli.db_path.to_string(),
+        ),
+    }
+    .await?;
 
     Ok(())
 }
@@ -84,14 +88,13 @@ async fn command_run(
 
     let channel = fetch_channel(&reqwest_client, feed_url).await?;
 
-    let mut client = XrpcReqwestClient::new(
-        xrpc_host,
-        reqwest_client,
-    );
-    let session = client.create_session(create_session::Input {
-        identifier: atproto_identifier,
-        password: atproto_password,
-    }).await?;
+    let mut client = XrpcReqwestClient::new(xrpc_host, reqwest_client);
+    let session = client
+        .create_session(create_session::Input {
+            identifier: atproto_identifier,
+            password: atproto_password,
+        })
+        .await?;
     client.set_session(session.access_jwt, session.did);
 
     post_items(&client, &channel, &filelock_path, &db_path).await?;
@@ -99,7 +102,10 @@ async fn command_run(
     Ok(())
 }
 
-async fn fetch_channel(client: &reqwest::Client, url: String) -> Result<rss::Channel, Box<dyn Error>> {
+async fn fetch_channel(
+    client: &reqwest::Client,
+    url: String,
+) -> Result<rss::Channel, Box<dyn Error>> {
     let request = client.get(url).send().await?;
     let content_bytes = request.bytes().await?;
     let channel = rss::Channel::read_from(&content_bytes[..])?;
@@ -112,7 +118,8 @@ async fn post_items<Client>(
     filelock_path: &str,
     db_path: &str,
 ) -> Result<(), Box<dyn Error>>
-    where Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync
+where
+    Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync,
 {
     {
         let mut append_db_file = OpenOptions::new()
@@ -128,9 +135,12 @@ async fn post_items<Client>(
         let mut filelock = FileLock::lock(
             filelock_path,
             false,
-            file_lock::FileOptions::new().write(true).create(true).truncate(true),
+            file_lock::FileOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true),
         )
-            .map_err(|err| format!("Failed to get lock: {err}"))?;
+        .map_err(|err| format!("Failed to get lock: {err}"))?;
         writeln!(filelock.file, "{}", Utc::now().to_rfc3339())
             .map_err(|err| format!("Failed to write lock: {err}"))?;
 
@@ -166,17 +176,18 @@ async fn post_items<Client>(
                     Some(bsky_post) => {
                         println!(
                             "orig_link={}: Posted to Bluesky: cid={}, uri={}",
-                            item_post.orig_link,
-                            bsky_post.cid,
-                            bsky_post.uri,
+                            item_post.orig_link, bsky_post.cid, bsky_post.uri,
                         );
                     }
                 }
-                append_db_file.write_all(item_post.orig_link.as_bytes())
+                append_db_file
+                    .write_all(item_post.orig_link.as_bytes())
                     .map_err(|err| format!("Failed to write DB: {err}"))?;
-                append_db_file.write_all("\n".as_bytes())
+                append_db_file
+                    .write_all("\n".as_bytes())
                     .map_err(|err| format!("Failed to write DB: {err}"))?;
-                append_db_file.flush()
+                append_db_file
+                    .flush()
                     .map_err(|err| format!("Failed to flush DB: {err}"))?;
                 processed_links.push(item_post.orig_link);
             }
@@ -188,11 +199,11 @@ async fn post_items<Client>(
                 .truncate(true)
                 .open(db_path)
                 .map_err(|err| format!("Failed to open DB: {err}"))?;
-            write_db_file.write_all(processed_links.join("\n").as_bytes())
+            write_db_file
+                .write_all(processed_links.join("\n").as_bytes())
                 .map_err(|err| format!("Failed to write DB: {err}"))?;
         }
     }
-
 
     Ok(())
 }
@@ -208,25 +219,22 @@ async fn post_item<Client>(
     item: &rss::Item,
     done_links: &HashSet<String>,
 ) -> Result<ItemPost, Box<dyn Error>>
-    where Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync
+where
+    Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync,
 {
     use bsky::richtext::facet;
 
     let description = match &item.description {
-        Some(content) => {
-            content
-        }
-        None => {
-            Err(Box::<dyn Error>::from("Failed to get any descriptions of the given RSS item."))?
-        }
+        Some(content) => content,
+        None => Err(Box::<dyn Error>::from(
+            "Failed to get any descriptions of the given RSS item.",
+        ))?,
     };
     let item_link = match &item.link {
-        Some(content) => {
-            content
-        }
-        None => {
-            Err(Box::<dyn Error>::from("Failed to get any links of the given RSS item."))?
-        }
+        Some(content) => content,
+        None => Err(Box::<dyn Error>::from(
+            "Failed to get any links of the given RSS item.",
+        ))?,
     };
 
     if done_links.contains(item_link) {
@@ -284,11 +292,9 @@ async fn post_item<Client>(
                         byte_start,
                         byte_end,
                     },
-                    features: vec![
-                        facet::MainFeaturesItem::Link(Box::new(facet::Link {
-                            uri: link,
-                        })),
-                    ],
+                    features: vec![facet::MainFeaturesItem::Link(Box::new(facet::Link {
+                        uri: link,
+                    }))],
                 });
 
                 if need_truncate {
@@ -313,11 +319,9 @@ async fn post_item<Client>(
                 byte_start,
                 byte_end,
             },
-            features: vec![
-                facet::MainFeaturesItem::Link(Box::new(facet::Link {
-                    uri: item_link.to_string(),
-                })),
-            ],
+            features: vec![facet::MainFeaturesItem::Link(Box::new(facet::Link {
+                uri: item_link.to_string(),
+            }))],
         });
     }
 
@@ -340,19 +344,18 @@ async fn post_to_bsky<Client>(
     text: String,
     facets: Vec<bsky::richtext::facet::Main>,
 ) -> Result<BskyPost, Box<dyn Error>>
-    where Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync
+where
+    Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync,
 {
     use atproto::repo::create_record;
-    use bsky::feed::post;
     use atrium_api::records::Record;
+    use bsky::feed::post;
 
     let target_did = match client.current_did() {
-        Some(did) => {
-            did
-        }
-        None => {
-            Err(Box::<dyn Error>::from("Expected an authenticated session of the given client."))?
-        }
+        Some(did) => did,
+        None => Err(Box::<dyn Error>::from(
+            "Expected an authenticated session of the given client.",
+        ))?,
     };
 
     let input = create_record::Input {

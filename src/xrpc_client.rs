@@ -27,11 +27,12 @@ pub trait XrpcHttpClient: xrpc::HttpClient + xrpc::XrpcClient {
 
 #[async_trait]
 impl xrpc::HttpClient for XrpcReqwestClient {
-    async fn send(&self, req: xrpc::http::Request<Vec<u8>>) -> Result<xrpc::http::Response<Vec<u8>>, Box<dyn Error>> {
+    async fn send(
+        &self,
+        req: xrpc::http::Request<Vec<u8>>,
+    ) -> Result<xrpc::http::Response<Vec<u8>>, Box<dyn Error>> {
         let res = self.client.execute(req.try_into()?).await?;
-        let mut builder = xrpc::http::Response::builder()
-            .status(res.status())
-            ;
+        let mut builder = xrpc::http::Response::builder().status(res.status());
         for (k, v) in res.headers() {
             builder = builder.header(k, v);
         }

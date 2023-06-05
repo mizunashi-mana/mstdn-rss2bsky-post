@@ -1,5 +1,7 @@
-use html5ever::tokenizer::{TokenSink, TokenSinkResult, Tokenizer, BufferQueue, Token, TagKind, Tag};
-use html5ever::tendril::{SliceExt};
+use html5ever::tendril::SliceExt;
+use html5ever::tokenizer::{
+    BufferQueue, Tag, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer,
+};
 use std::error::Error;
 
 use crate::richtext::{RichText, RichTextSegment};
@@ -112,7 +114,11 @@ impl Html2RichTextSink {
                     text: text_continue.to_string(),
                 });
             }
-            ProcessState::ProcessingLink { text_continue, link, link_tag_depth } => {
+            ProcessState::ProcessingLink {
+                text_continue,
+                link,
+                link_tag_depth,
+            } => {
                 if self.tag_depth <= *link_tag_depth {
                     self.text.push(RichTextSegment::Link {
                         text: text_continue.to_string(),
@@ -138,19 +144,17 @@ impl TokenSink for Html2RichTextSink {
             Token::NullCharacterToken => {
                 self.process_plain_char('\0');
             }
-            Token::TagToken(tag) => {
-                match tag.kind {
-                    TagKind::StartTag => {
-                        self.process_start_tag(&tag);
-                        if tag.self_closing {
-                            self.process_eng_tag(&tag);
-                        }
-                    }
-                    TagKind::EndTag => {
+            Token::TagToken(tag) => match tag.kind {
+                TagKind::StartTag => {
+                    self.process_start_tag(&tag);
+                    if tag.self_closing {
                         self.process_eng_tag(&tag);
                     }
                 }
-            }
+                TagKind::EndTag => {
+                    self.process_eng_tag(&tag);
+                }
+            },
             Token::DoctypeToken(_) | Token::CommentToken(_) => {
                 // do nothing
             }
@@ -183,11 +187,7 @@ pub fn from_html(content: &str) -> Result<RichText, Box<dyn Error>> {
     tokenizer.end();
 
     match tokenizer.sink.err {
-        Some(err) => {
-            Err(Box::<dyn Error>::from(err))?
-        }
-        None => {
-            Ok(tokenizer.sink.text)
-        }
+        Some(err) => Err(Box::<dyn Error>::from(err))?,
+        None => Ok(tokenizer.sink.text),
     }
 }
