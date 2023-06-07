@@ -41,6 +41,9 @@ enum Commands {
         #[arg(long)]
         feed_url: String,
 
+        #[arg(long, default_value_t = String::from("[マストドン投稿から]:"))]
+        original_link_prefix: String,
+
         #[arg(long, env = "ATPROTO_IDENTIFIER")]
         atproto_identifier: String,
 
@@ -58,12 +61,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             feed_url,
             atproto_identifier,
             atproto_password,
+            original_link_prefix,
             ..
         } => command_run(
             feed_url.to_string(),
             cli.xrpc_host.to_string(),
             atproto_identifier.to_string(),
             atproto_password.to_string(),
+            original_link_prefix.to_string(),
             cli.filelock_path.to_string(),
             cli.db_path.to_string(),
         ),
@@ -78,6 +83,7 @@ async fn command_run(
     xrpc_host: String,
     atproto_identifier: String,
     atproto_password: String,
+    original_link_prefix: String,
     filelock_path: String,
     db_path: String,
 ) -> Result<(), Box<dyn Error>> {
@@ -97,7 +103,13 @@ async fn command_run(
         .await?;
     client.set_session(session.access_jwt, session.did);
 
-    post_items(&client, &channel, &filelock_path, &db_path).await?;
+    post_items(
+        &client,
+        &channel,
+        &original_link_prefix,
+        &filelock_path,
+        &db_path,
+    ).await?;
 
     Ok(())
 }
@@ -115,6 +127,7 @@ async fn fetch_channel(
 async fn post_items<Client>(
     client: &Client,
     channel: &rss::Channel,
+    original_link_prefix: &str,
     filelock_path: &str,
     db_path: &str,
 ) -> Result<(), Box<dyn Error>>
@@ -165,7 +178,12 @@ where
                 .open(db_path)
                 .map_err(|err| format!("Failed to open DB: {err}"))?;
             for item in channel.items.iter().rev() {
-                let item_post = post_item(client, &item, &done_links).await?;
+                let item_post = post_item(
+                    client,
+                    &item,
+                    original_link_prefix,
+                    &done_links,
+                ).await?;
                 match item_post.bsky_post_opt {
                     None => {
                         println!(
@@ -217,6 +235,7 @@ struct ItemPost {
 async fn post_item<Client>(
     client: &Client,
     item: &rss::Item,
+    original_link_prefix: &str,
     done_links: &HashSet<String>,
 ) -> Result<ItemPost, Box<dyn Error>>
 where
@@ -272,7 +291,7 @@ where
             RichTextSegment::Link { text, link } => {
                 let text_count = text.chars().count();
 
-                let byte_start = text.len() as i32;
+                let byte_start = content.len() as i32;
 
                 if content_count + text_count > limit_count {
                     for c in text.chars().take(limit_count) {
@@ -285,7 +304,7 @@ where
                     content_count += text_count;
                 }
 
-                let byte_end = text.len() as i32;
+                let byte_end = content.len() as i32;
 
                 facets.push(facet::Main {
                     index: facet::ByteSlice {
@@ -308,7 +327,7 @@ where
         content.push_str("...");
     }
     content.push_str("\n");
-    content.push_str("[マストドン投稿から]:");
+    content.push_str(original_link_prefix);
 
     {
         let byte_start = content.len() as i32;
