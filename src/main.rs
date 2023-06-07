@@ -109,7 +109,8 @@ async fn command_run(
         &original_link_prefix,
         &filelock_path,
         &db_path,
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -178,12 +179,7 @@ where
                 .open(db_path)
                 .map_err(|err| format!("Failed to open DB: {err}"))?;
             for item in channel.items.iter().rev() {
-                let item_post = post_item(
-                    client,
-                    &item,
-                    original_link_prefix,
-                    &done_links,
-                ).await?;
+                let item_post = post_item(client, &item, original_link_prefix, &done_links).await?;
                 match item_post.bsky_post_opt {
                     None => {
                         println!(
