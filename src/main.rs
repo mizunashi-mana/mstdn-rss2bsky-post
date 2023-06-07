@@ -164,7 +164,7 @@ where
                 .append(true)
                 .open(db_path)
                 .map_err(|err| format!("Failed to open DB: {err}"))?;
-            for item in channel.items.iter().take(2) {
+            for item in channel.items.iter().rev() {
                 let item_post = post_item(client, &item, &done_links).await?;
                 match item_post.bsky_post_opt {
                     None => {
