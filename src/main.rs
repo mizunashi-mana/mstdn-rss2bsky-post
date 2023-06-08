@@ -8,6 +8,7 @@ use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::marker::Sync;
+use std::collections::VecDeque;
 
 mod xrpc_client;
 use xrpc_client::{XrpcHttpClient, XrpcReqwestClient};
@@ -30,6 +31,12 @@ struct Cli {
 
     #[arg(long)]
     db_path: String,
+
+    #[arg(long, default_value_t = 50)]
+    min_save_posts: usize,
+
+    #[arg(long, default_value_t = false)]
+    dry_run: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -64,6 +71,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             original_link_prefix,
             ..
         } => command_run(
+            cli.dry_run,
             feed_url.to_string(),
             cli.xrpc_host.to_string(),
             atproto_identifier.to_string(),
@@ -71,6 +79,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             original_link_prefix.to_string(),
             cli.filelock_path.to_string(),
             cli.db_path.to_string(),
+            cli.min_save_posts,
         ),
     }
     .await?;
@@ -79,6 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn command_run(
+    dry_run: bool,
     feed_url: String,
     xrpc_host: String,
     atproto_identifier: String,
@@ -86,33 +96,53 @@ async fn command_run(
     original_link_prefix: String,
     filelock_path: String,
     db_path: String,
+    min_save_posts: usize,
 ) -> Result<(), Box<dyn Error>> {
     use atproto::server::create_session;
     use create_session::CreateSession;
 
     let reqwest_client = reqwest::Client::new();
 
-    let channel = fetch_channel(&reqwest_client, feed_url).await?;
+    let items = fetch_items(dry_run, &reqwest_client, feed_url).await?;
 
-    let mut client = XrpcReqwestClient::new(xrpc_host, reqwest_client);
-    let session = client
-        .create_session(create_session::Input {
-            identifier: atproto_identifier,
-            password: atproto_password,
-        })
-        .await?;
-    client.set_session(session.access_jwt, session.did);
+    let mut client = XrpcReqwestClient::new(xrpc_host, reqwest_client, dry_run);
+    if dry_run {
+        println!("Dry run: authenticate by {atproto_identifier}");
+    } else {
+        let session = client
+            .create_session(create_session::Input {
+                identifier: atproto_identifier,
+                password: atproto_password,
+            })
+            .await?;
+        client.set_session(session.access_jwt, session.did);
+    }
 
     post_items(
+        dry_run,
         &client,
-        &channel,
+        &items,
         &original_link_prefix,
         &filelock_path,
         &db_path,
+        min_save_posts,
     )
     .await?;
 
     Ok(())
+}
+
+async fn fetch_items(
+    dry_run: bool,
+    client: &reqwest::Client,
+    feed_url: String
+) -> Result<Vec<rss::Item>, Box<dyn Error>> {
+    if dry_run {
+        Ok(vec![])
+    } else {
+        let channel = fetch_channel(&client, feed_url).await?;
+        Ok(channel.items)
+    }
 }
 
 async fn fetch_channel(
@@ -126,16 +156,20 @@ async fn fetch_channel(
 }
 
 async fn post_items<Client>(
+    dry_run: bool,
     client: &Client,
-    channel: &rss::Channel,
+    items: &[rss::Item],
     original_link_prefix: &str,
     filelock_path: &str,
     db_path: &str,
+    min_save_posts: usize,
 ) -> Result<(), Box<dyn Error>>
 where
     Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync,
 {
-    {
+    if dry_run {
+        println!("Dry run: create DB file if not exists.");
+    } else {
         let mut append_db_file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -145,7 +179,9 @@ where
         append_db_file.write(&vec![])?;
     }
 
-    {
+    if dry_run {
+        println!("Dry run: lock and post items.");
+    } else {
         let mut filelock = FileLock::lock(
             filelock_path,
             false,
@@ -158,19 +194,28 @@ where
         writeln!(filelock.file, "{}", Utc::now().to_rfc3339())
             .map_err(|err| format!("Failed to write lock: {err}"))?;
 
+        let mut links_for_save: Vec<String> = vec![];
         let done_links = {
             let mut done_links: HashSet<String> = HashSet::new();
+            let mut done_links_for_save: VecDeque<String> = VecDeque::new();
             let db_file = OpenOptions::new()
                 .read(true)
                 .open(db_path)
                 .map_err(|err| format!("Failed to open DB: {err}"))?;
             for done_link in BufReader::new(db_file).lines() {
-                done_links.insert(done_link?);
+                let done_link = done_link?;
+                done_links.insert(done_link.to_string());
+                done_links_for_save.push_back(done_link);
+                if done_links_for_save.len() > min_save_posts {
+                    done_links_for_save.pop_front();
+                }
+            }
+            for done_link_for_save in done_links_for_save.iter_mut() {
+                links_for_save.push(done_link_for_save.to_string());
             }
             done_links
         };
 
-        let mut processed_links: Vec<String> = vec![];
         {
             let mut append_db_file = OpenOptions::new()
                 .create(true)
@@ -178,7 +223,7 @@ where
                 .append(true)
                 .open(db_path)
                 .map_err(|err| format!("Failed to open DB: {err}"))?;
-            for item in channel.items.iter().rev() {
+            for item in items.iter().rev() {
                 let item_post = post_item(client, &item, original_link_prefix, &done_links).await?;
                 match item_post.bsky_post_opt {
                     None => {
@@ -192,18 +237,14 @@ where
                             "orig_link={}: Posted to Bluesky: cid={}, uri={}",
                             item_post.orig_link, bsky_post.cid, bsky_post.uri,
                         );
+                        writeln!(append_db_file, "{}", &item_post.orig_link)
+                            .map_err(|err| format!("Failed to write DB: {err}"))?;
+                        append_db_file
+                            .flush()
+                            .map_err(|err| format!("Failed to flush DB: {err}"))?;
+                        links_for_save.push(item_post.orig_link);
                     }
                 }
-                append_db_file
-                    .write_all(item_post.orig_link.as_bytes())
-                    .map_err(|err| format!("Failed to write DB: {err}"))?;
-                append_db_file
-                    .write_all("\n".as_bytes())
-                    .map_err(|err| format!("Failed to write DB: {err}"))?;
-                append_db_file
-                    .flush()
-                    .map_err(|err| format!("Failed to flush DB: {err}"))?;
-                processed_links.push(item_post.orig_link);
             }
         }
 
@@ -213,9 +254,10 @@ where
                 .truncate(true)
                 .open(db_path)
                 .map_err(|err| format!("Failed to open DB: {err}"))?;
-            write_db_file
-                .write_all(processed_links.join("\n").as_bytes())
-                .map_err(|err| format!("Failed to write DB: {err}"))?;
+            for link_for_save in links_for_save {
+                writeln!(write_db_file, "{}", link_for_save)
+                    .map_err(|err| format!("Failed to write DB: {err}"))?;
+            }
         }
     }
 

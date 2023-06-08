@@ -7,15 +7,17 @@ pub struct XrpcReqwestClient {
     access_jwt: Option<String>,
     access_did: Option<String>,
     host: String,
+    dry_run: bool,
 }
 
 impl XrpcReqwestClient {
-    pub fn new(host: String, client: reqwest::Client) -> Self {
+    pub fn new(host: String, client: reqwest::Client, dry_run: bool) -> Self {
         Self {
-            host: host,
+            host,
             access_jwt: None,
             access_did: None,
-            client: client,
+            client,
+            dry_run,
         }
     }
 }
@@ -31,7 +33,11 @@ impl xrpc::HttpClient for XrpcReqwestClient {
         &self,
         req: xrpc::http::Request<Vec<u8>>,
     ) -> Result<xrpc::http::Response<Vec<u8>>, Box<dyn Error>> {
-        let res = self.client.execute(req.try_into()?).await?;
+        let res = if self.dry_run {
+            Err(format!("Enabled dry run mode."))?
+        } else {
+            self.client.execute(req.try_into()?).await?
+        };
         let mut builder = xrpc::http::Response::builder().status(res.status());
         for (k, v) in res.headers() {
             builder = builder.header(k, v);
