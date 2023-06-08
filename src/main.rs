@@ -4,11 +4,11 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use file_lock::FileLock;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::marker::Sync;
-use std::collections::VecDeque;
 
 mod xrpc_client;
 use xrpc_client::{XrpcHttpClient, XrpcReqwestClient};
@@ -135,7 +135,7 @@ async fn command_run(
 async fn fetch_items(
     dry_run: bool,
     client: &reqwest::Client,
-    feed_url: String
+    feed_url: String,
 ) -> Result<Vec<rss::Item>, Box<dyn Error>> {
     if dry_run {
         Ok(vec![])
