@@ -75,19 +75,18 @@ impl XrpcHttpClient for XrpcReqwestClient {
         let res = if self.dry_run {
             Err(format!("Enabled dry run mode."))?
         } else {
-            let req = reqwest::Request::new(
-                reqwest::Method::GET,
-                reqwest::Url::parse(url)?,
-            );
+            let req = reqwest::Request::new(reqwest::Method::GET, reqwest::Url::parse(url)?);
             self.client.execute(req).await?
         };
         let status = res.status();
         if status == 200 {
-            res.bytes().await
-                .map_err(|err| err.into())
+            res.bytes().await.map_err(|err| err.into())
         } else {
             let res_text = res.text().await;
-            Err(format!("Respond not ok: status={}, body={:?}", status, res_text))?
+            Err(format!(
+                "Respond not ok: status={}, body={:?}",
+                status, res_text
+            ))?
         }
     }
 }

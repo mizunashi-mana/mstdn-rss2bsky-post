@@ -1,6 +1,6 @@
 use atrium_api::app::bsky;
-use atrium_api::com::atproto;
 use atrium_api::blob::BlobRef;
+use atrium_api::com::atproto;
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use file_lock::FileLock;
@@ -171,8 +171,7 @@ where
     Client: XrpcHttpClient
         + atproto::repo::create_record::CreateRecord
         + atproto::repo::upload_blob::UploadBlob
-        + Sync
-        ,
+        + Sync,
 {
     if dry_run {
         println!("Dry run: create DB file if not exists.");
@@ -287,8 +286,7 @@ where
     Client: XrpcHttpClient
         + atproto::repo::create_record::CreateRecord
         + atproto::repo::upload_blob::UploadBlob
-        + Sync
-        ,
+        + Sync,
 {
     use bsky::richtext::facet;
 
@@ -395,23 +393,15 @@ where
 
     let image_url_opt = rss_ext::get_media(item)
         .and_then(|media| match media.rating {
-            rss_ext::Rating::NonAdult => {
-                Some(media)
-            }
+            rss_ext::Rating::NonAdult => Some(media),
             rss_ext::Rating::Other => {
                 eprintln!("Ignore a image might be sensitive: {}", media.url);
                 None
             }
         })
-        .map(|media| media.url)
-        ;
+        .map(|media| media.url);
 
-    let result = post_to_bsky(
-        client,
-        content,
-        facets,
-        image_url_opt,
-    ).await?;
+    let result = post_to_bsky(client, content, facets, image_url_opt).await?;
 
     Ok(ItemPost {
         orig_link: item_link.to_string(),
@@ -435,8 +425,7 @@ where
     Client: XrpcHttpClient
         + atproto::repo::create_record::CreateRecord
         + atproto::repo::upload_blob::UploadBlob
-        + Sync
-        ,
+        + Sync,
 {
     use atproto::repo::create_record;
     use atrium_api::records::Record;
@@ -457,16 +446,14 @@ where
                 image: blob,
             })
         }
-        None => {
-            None
-        }
+        None => None,
     };
 
-    let embed = image_opt
-        .map(|image| post::RecordEmbedEnum::AppBskyEmbedImagesMain(Box::new(bsky::embed::images::Main {
-            images: vec![image]
-        })))
-        ;
+    let embed = image_opt.map(|image| {
+        post::RecordEmbedEnum::AppBskyEmbedImagesMain(Box::new(bsky::embed::images::Main {
+            images: vec![image],
+        }))
+    });
 
     let input = create_record::Input {
         collection: String::from("app.bsky.feed.post"),
