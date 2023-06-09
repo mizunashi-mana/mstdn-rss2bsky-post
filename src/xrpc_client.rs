@@ -22,9 +22,11 @@ impl XrpcReqwestClient {
     }
 }
 
+#[async_trait]
 pub trait XrpcHttpClient: xrpc::HttpClient + xrpc::XrpcClient {
     fn set_session(&mut self, jwt: String, did: String) -> ();
     fn current_did(&self) -> Option<&str>;
+    async fn get_remote_content(&self, url: &str) -> Result<bytes::Bytes, Box<dyn Error>>;
 }
 
 #[async_trait]
@@ -58,6 +60,7 @@ impl xrpc::XrpcClient for XrpcReqwestClient {
     }
 }
 
+#[async_trait]
 impl XrpcHttpClient for XrpcReqwestClient {
     fn current_did(&self) -> Option<&str> {
         self.access_did.as_deref()
@@ -66,6 +69,26 @@ impl XrpcHttpClient for XrpcReqwestClient {
     fn set_session(&mut self, jwt: String, did: String) {
         self.access_jwt = Some(jwt);
         self.access_did = Some(did);
+    }
+
+    async fn get_remote_content(&self, url: &str) -> Result<bytes::Bytes, Box<dyn Error>> {
+        let res = if self.dry_run {
+            Err(format!("Enabled dry run mode."))?
+        } else {
+            let req = reqwest::Request::new(
+                reqwest::Method::GET,
+                reqwest::Url::parse(url)?,
+            );
+            self.client.execute(req).await?
+        };
+        let status = res.status();
+        if status == 200 {
+            res.bytes().await
+                .map_err(|err| err.into())
+        } else {
+            let res_text = res.text().await;
+            Err(format!("Respond not ok: status={}, body={:?}", status, res_text))?
+        }
     }
 }
 

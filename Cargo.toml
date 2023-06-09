@@ -15,6 +15,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = "0.4"
 html5ever = "0.26"
 file-lock = "2.1"
+bytes = "1.4"
 
 [[bin]]
 name = "mstdn-rss2bsky-post"

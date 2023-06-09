@@ -872,6 +872,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "atrium-api",
+ "bytes",
  "chrono",
  "clap",
  "file-lock",

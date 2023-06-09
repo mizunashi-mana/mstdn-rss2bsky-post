@@ -1,5 +1,6 @@
 use atrium_api::app::bsky;
 use atrium_api::com::atproto;
+use atrium_api::blob::BlobRef;
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use file_lock::FileLock;
@@ -15,6 +16,8 @@ use xrpc_client::{XrpcHttpClient, XrpcReqwestClient};
 
 mod richtext;
 use richtext::RichTextSegment;
+
+mod rss_ext;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -165,7 +168,11 @@ async fn post_items<Client>(
     min_save_posts: usize,
 ) -> Result<(), Box<dyn Error>>
 where
-    Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync,
+    Client: XrpcHttpClient
+        + atproto::repo::create_record::CreateRecord
+        + atproto::repo::upload_blob::UploadBlob
+        + Sync
+        ,
 {
     if dry_run {
         println!("Dry run: create DB file if not exists.");
@@ -277,7 +284,11 @@ async fn post_item<Client>(
     done_links: &HashSet<String>,
 ) -> Result<ItemPost, Box<dyn Error>>
 where
-    Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync,
+    Client: XrpcHttpClient
+        + atproto::repo::create_record::CreateRecord
+        + atproto::repo::upload_blob::UploadBlob
+        + Sync
+        ,
 {
     use bsky::richtext::facet;
 
@@ -382,7 +393,25 @@ where
         });
     }
 
-    let result = post_to_bsky(client, content, facets).await?;
+    let image_url_opt = rss_ext::get_media(item)
+        .and_then(|media| match media.rating {
+            rss_ext::Rating::NonAdult => {
+                Some(media)
+            }
+            rss_ext::Rating::Other => {
+                eprintln!("Ignore a image might be sensitive: {}", media.url);
+                None
+            }
+        })
+        .map(|media| media.url)
+        ;
+
+    let result = post_to_bsky(
+        client,
+        content,
+        facets,
+        image_url_opt,
+    ).await?;
 
     Ok(ItemPost {
         orig_link: item_link.to_string(),
@@ -400,9 +429,14 @@ async fn post_to_bsky<Client>(
     client: &Client,
     text: String,
     facets: Vec<bsky::richtext::facet::Main>,
+    image_url_opt: Option<String>,
 ) -> Result<BskyPost, Box<dyn Error>>
 where
-    Client: XrpcHttpClient + atproto::repo::create_record::CreateRecord + Sync,
+    Client: XrpcHttpClient
+        + atproto::repo::create_record::CreateRecord
+        + atproto::repo::upload_blob::UploadBlob
+        + Sync
+        ,
 {
     use atproto::repo::create_record;
     use atrium_api::records::Record;
@@ -415,11 +449,30 @@ where
         ))?,
     };
 
+    let image_opt = match image_url_opt {
+        Some(image_url) => {
+            let blob = upload_remote_image_to_bsky(client, &image_url).await?;
+            Some(bsky::embed::images::Image {
+                alt: image_url,
+                image: blob,
+            })
+        }
+        None => {
+            None
+        }
+    };
+
+    let embed = image_opt
+        .map(|image| post::RecordEmbedEnum::AppBskyEmbedImagesMain(Box::new(bsky::embed::images::Main {
+            images: vec![image]
+        })))
+        ;
+
     let input = create_record::Input {
         collection: String::from("app.bsky.feed.post"),
         record: Record::AppBskyFeedPost(Box::new(post::Record {
             created_at: Utc::now().to_rfc3339(),
-            embed: None,
+            embed,
             entities: None,
             facets: Some(facets),
             reply: None,
@@ -436,4 +489,16 @@ where
         cid: result.cid,
         uri: result.uri,
     })
+}
+
+async fn upload_remote_image_to_bsky<Client>(
+    client: &Client,
+    image_url: &str,
+) -> Result<BlobRef, Box<dyn Error>>
+where
+    Client: XrpcHttpClient + atproto::repo::upload_blob::UploadBlob + Sync,
+{
+    let remote_content = client.get_remote_content(image_url).await?;
+    let output = client.upload_blob(remote_content.to_vec()).await?;
+    Ok(output.blob)
 }
