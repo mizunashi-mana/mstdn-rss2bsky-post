@@ -8,6 +8,7 @@ use crate::richtext::{RichText, RichTextSegment};
 
 struct Html2RichTextSink {
     text: RichText,
+    first_paragraph: bool,
     tag_depth: usize,
     state: ProcessState,
     err: Option<String>,
@@ -98,6 +99,9 @@ impl Html2RichTextSink {
             "a" => {
                 self.end_process();
             }
+            "p" => {
+                self.end_paragraph();
+            }
             _ => {
                 // do nothing
             }
@@ -128,6 +132,14 @@ impl Html2RichTextSink {
             }
         }
         self.state = ProcessState::NotProcessed;
+    }
+
+    fn end_paragraph(&mut self) -> () {
+        if self.first_paragraph {
+            self.first_paragraph = false;
+        } else {
+            self.process_plain_char('\n');
+        }
     }
 }
 
@@ -173,6 +185,7 @@ pub fn from_html(content: &str) -> Result<RichText, Box<dyn Error>> {
     let mut tokenizer = Tokenizer::new(
         Html2RichTextSink {
             text: vec![],
+            first_paragraph: true,
             tag_depth: 0,
             state: ProcessState::NotProcessed,
             err: None,

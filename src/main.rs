@@ -54,6 +54,9 @@ enum Commands {
         #[arg(long, default_value_t = String::from("[マストドン投稿から]:"))]
         original_link_prefix: String,
 
+        #[arg(long, default_value_t = 300)]
+        post_text_limit: usize,
+
         #[arg(long, env = "ATPROTO_IDENTIFIER")]
         atproto_identifier: String,
 
@@ -72,6 +75,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             atproto_identifier,
             atproto_password,
             original_link_prefix,
+            post_text_limit,
             ..
         } => command_run(
             cli.dry_run,
@@ -83,6 +87,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             cli.filelock_path.to_string(),
             cli.db_path.to_string(),
             cli.min_save_posts,
+            *post_text_limit,
         ),
     }
     .await?;
@@ -100,6 +105,7 @@ async fn command_run(
     filelock_path: String,
     db_path: String,
     min_save_posts: usize,
+    post_text_limit: usize,
 ) -> Result<(), Box<dyn Error>> {
     use atproto::server::create_session;
     use create_session::CreateSession;
@@ -129,6 +135,7 @@ async fn command_run(
         &filelock_path,
         &db_path,
         min_save_posts,
+        post_text_limit,
     )
     .await?;
 
@@ -166,6 +173,7 @@ async fn post_items<Client>(
     filelock_path: &str,
     db_path: &str,
     min_save_posts: usize,
+    post_text_limit: usize,
 ) -> Result<(), Box<dyn Error>>
 where
     Client: XrpcHttpClient
@@ -230,7 +238,14 @@ where
                 .open(db_path)
                 .map_err(|err| format!("Failed to open DB: {err}"))?;
             for item in items.iter().rev() {
-                let item_post = post_item(client, &item, original_link_prefix, &done_links).await?;
+                let item_post = post_item(
+                    client,
+                    &item,
+                    original_link_prefix,
+                    &done_links,
+                    post_text_limit,
+                )
+                .await?;
                 match item_post.bsky_post_opt {
                     None => {
                         println!(
@@ -281,6 +296,7 @@ async fn post_item<Client>(
     item: &rss::Item,
     original_link_prefix: &str,
     done_links: &HashSet<String>,
+    post_text_limit: usize,
 ) -> Result<ItemPost, Box<dyn Error>>
 where
     Client: XrpcHttpClient
@@ -311,24 +327,24 @@ where
     }
 
     let mut content = String::from("");
-    let limit_count = 200 - 3;
+    let mut limit_count =
+        post_text_limit - 1 - original_link_prefix.chars().count() - item_link.chars().count() - 3;
     let mut need_truncate = false;
-    let mut content_count = 0;
     let mut facets: Vec<facet::Main> = vec![];
     for seg in richtext::from_html(description.as_str())? {
         match seg {
             RichTextSegment::PlainText { text } => {
                 let text_count = text.chars().count();
 
-                if content_count + text_count > limit_count {
+                if text_count > limit_count {
                     for c in text.chars().take(limit_count) {
                         content.push(c);
                     }
                     need_truncate = true;
-                    content_count += limit_count;
+                    limit_count = 0;
                 } else {
                     content.push_str(&text);
-                    content_count += text_count;
+                    limit_count -= text_count;
                 }
 
                 if need_truncate {
@@ -340,15 +356,15 @@ where
 
                 let byte_start = content.len() as i32;
 
-                if content_count + text_count > limit_count {
+                if text_count > limit_count {
                     for c in text.chars().take(limit_count) {
                         content.push(c);
                     }
                     need_truncate = true;
-                    content_count += limit_count;
+                    limit_count = 0;
                 } else {
                     content.push_str(&text);
-                    content_count += text_count;
+                    limit_count -= text_count;
                 }
 
                 let byte_end = content.len() as i32;
