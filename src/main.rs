@@ -328,7 +328,7 @@ where
 
     let mut content = String::from("");
     let mut limit_count =
-        post_text_limit - 1 - original_link_prefix.chars().count() - item_link.chars().count() - 3;
+        post_text_limit - original_link_prefix.chars().count() - item_link.chars().count() - 4;
     let mut need_truncate = false;
     let mut facets: Vec<facet::Main> = vec![];
     for seg in richtext::from_html(description.as_str())? {
@@ -387,9 +387,8 @@ where
     }
 
     if need_truncate {
-        content.push_str("...");
+        content.push_str("...\n");
     }
-    content.push_str("\n");
     content.push_str(original_link_prefix);
 
     {
