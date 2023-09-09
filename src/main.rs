@@ -155,16 +155,6 @@ async fn fetch_items(
     }
 }
 
-async fn fetch_channel(
-    client: &reqwest::Client,
-    url: String,
-) -> Result<rss::Channel, Box<dyn Error>> {
-    let request = client.get(url).send().await?;
-    let content_bytes = request.bytes().await?;
-    let channel = rss::Channel::read_from(&content_bytes[..])?;
-    Ok(channel)
-}
-
 async fn post_items<Client>(
     dry_run: bool,
     client: &Client,
@@ -283,6 +273,16 @@ where
     }
 
     Ok(())
+}
+
+async fn fetch_channel(
+    client: &reqwest::Client,
+    url: String,
+) -> Result<rss::Channel, Box<dyn Error>> {
+    let request = client.get(url).send().await?;
+    let content_bytes = request.bytes().await?;
+    let channel = rss::Channel::read_from(&content_bytes[..])?;
+    Ok(channel)
 }
 
 #[derive(Debug)]
